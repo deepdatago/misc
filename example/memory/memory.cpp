@@ -23,6 +23,8 @@
 #include <mutex>
 #include <fstream>
 
+#include "PID_SGD/PID_SGD.h"
+
 // #include <sys/types.h>
 // #include <sys/sysctl.h>
 
@@ -193,6 +195,7 @@ void *runMethod(void* ipInput)
 
 int main ()
 {
+        PID_SGD		lPID_SGD(0, 0, 0, 0, 0, 0, 0);
         pthread_t       pthread[numOfThreads];
         void*           lRtn = NULL;
         srand(time(NULL));
