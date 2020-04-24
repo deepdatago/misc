@@ -215,7 +215,9 @@ bool PID_SGD::Compute()
 		LogTrace(mKd);
 		#endif
 
-		output += mOutputSum - (mKd / mSampleTimeInMilliSecond / 1000) * dInput;
+		// disable D
+		// output += mOutputSum - (mKd / mSampleTimeInMilliSecond / 1000) * dInput;
+		output += mOutputSum;
 		#ifdef PID_TRACE
 		// LogTrace(" output3: ");
 		// LogTrace(output);

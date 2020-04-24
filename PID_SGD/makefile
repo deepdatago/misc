@@ -7,10 +7,10 @@ OBJ =	PID_SGD.o \
 	
 
 %.o: %.cpp
-	$(CC) -fPIC -c -o $@  $< $(CFLAGS)
+	$(CC) -fPIC -g -c -o $@  $< $(CFLAGS)
 
 libpid_sgd.so: PID_SGD.o
-	ld -shared PID_SGD.o -o $@ $(LIBS)
+	ld -shared -g PID_SGD.o -o $@ $(LIBS)
 	cp $@ ../lib
 
 clean:

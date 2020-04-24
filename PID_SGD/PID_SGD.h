@@ -74,6 +74,7 @@ public:
 	void SetMaxLoss(double iMaxLoss);
 
 	double GetLastError();
+	double GetOutput() {return *mpOutput;}
 
 private:
 	double CalcSGD(double iPrevFeedback,

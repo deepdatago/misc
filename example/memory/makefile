@@ -10,10 +10,10 @@ OBJ =	memory.o \
 	
 
 %.o: %.cpp
-	$(CC) -c -o $@  $< $(CFLAGS) $(INCLUDE_PATH)
+	$(CC) -g -c -o $@  $< $(CFLAGS) $(INCLUDE_PATH)
 
 memory: memory.o
-	$(CC) memory.o -o $@ $(CFLAGS) $(LIBS) $(LIB_PATH)
+	$(CC) -g memory.o -o $@ $(CFLAGS) $(LIBS) $(LIB_PATH)
 
 clean:
 	rm -f *.o memory
