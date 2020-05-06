@@ -28,8 +28,15 @@
  **********************************************************************************************/
 
 #include "PID_SGD.h"
-#include <stdlib.h>
+// #include <stdlib.h>
+#include <cmath>
 #include <sys/time.h>
+#include <fstream>
+#include <sstream>
+
+#define LEARNING_RATE_FILE "PID_rate.txt"
+
+using namespace std;
 
 PID_SGD::PID_SGD(double* ipInput,
 	double* ipOutput,
@@ -78,6 +85,7 @@ PID_SGD::PID_SGD(double* ipInput,
 	SetTunings(mKp, mKi, mKd, iP_On);
 
 	mLastTime = millis()- mSampleTimeInMilliSecond;
+	LoadLearningRate();
 }
 
 unsigned long PID_SGD::millis()
@@ -98,13 +106,20 @@ bool PID_SGD::Compute()
 #ifdef PID_TRACE
 	mDebugStr = "";
 #endif
+	static unsigned long timer = millis();
 	if(!mbInAuto)
 		return false;
 
 	unsigned long now = millis();
+	if (now - timer > 5000)
+	{
+		// DumpLearningRate();
+		timer = millis();
+	}
 	unsigned long timeChange = (now - mLastTime);
 	if(timeChange>=mSampleTimeInMilliSecond)
 	{
+		unique_lock<recursive_mutex> lLock(mMutex);
 		/*Compute all the working error variables*/
 		double input = *mpInput;
 
@@ -209,7 +224,7 @@ bool PID_SGD::Compute()
 		}
 
 		/*Compute Rest of PID Output*/
-		mKd = CalcSGD(mLastDInput, dInput, mKd, mKdLearningRate);
+		// mKd = CalcSGD(mLastDInput, dInput, mKd, mKdLearningRate);
 		#ifdef PID_TRACE
 		LogTrace(" Calc mKd: ");
 		LogTrace(mKd);
@@ -254,6 +269,7 @@ bool PID_SGD::Compute()
  ******************************************************************************/
 void PID_SGD::SetTunings(double iKp, double iKi, double iKd, int iPOn)
 {
+	unique_lock<recursive_mutex> lLock(mMutex);
 	mP_On = iPOn;
 	mP_On_E = (iPOn == P_ON_E);
 
@@ -284,6 +300,7 @@ void PID_SGD::SetSampleTime(int iNewSampleTimeInMilliSecond)
 	if (iNewSampleTimeInMilliSecond <= 0)
 		return;
 
+	unique_lock<recursive_mutex> lLock(mMutex);
 	mSampleTimeInMilliSecond = iNewSampleTimeInMilliSecond;
 }
 
@@ -300,6 +317,7 @@ void PID_SGD::SetOutputLimits(double iMin, double iMax)
 	if(iMin >= iMax)
 		return;
 
+	unique_lock<recursive_mutex> lLock(mMutex);
 	mOutMin = iMin;
 	mOutMax = iMax;
 
@@ -325,6 +343,7 @@ void PID_SGD::SetOutputLimits(double iMin, double iMax)
 void PID_SGD::SetMode(int Mode)
 {
 	bool newAuto = (Mode == AUTOMATIC);
+	unique_lock<recursive_mutex> lLock(mMutex);
 	if(newAuto && !mbInAuto)
 	{  /*we just went from manual to auto*/
 	        PID_SGD::Initialize();
@@ -338,6 +357,7 @@ void PID_SGD::SetMode(int Mode)
  ******************************************************************************/
 void PID_SGD::Initialize()
 {
+	unique_lock<recursive_mutex> lLock(mMutex);
 	mOutputSum = *mpOutput;
 	mLastInput = *mpInput;
 	mLastDInput = *mpInput;
@@ -356,6 +376,7 @@ void PID_SGD::Initialize()
  ******************************************************************************/
 void PID_SGD::SetControllerDirection(int iDirection)
 {
+	unique_lock<recursive_mutex> lLock(mMutex);
 	if(mbInAuto && iDirection != mControllerDirection)
 	{
 		mKp = (0 - mKp);
@@ -367,11 +388,13 @@ void PID_SGD::SetControllerDirection(int iDirection)
 
 int PID_SGD::GetMode()
 {
+	unique_lock<recursive_mutex> lLock(mMutex);
 	return  mbInAuto ? AUTOMATIC : MANUAL;
 }
 
 int PID_SGD::GetDirection()
 {
+	unique_lock<recursive_mutex> lLock(mMutex);
 	return mControllerDirection;
 }
 
@@ -425,21 +448,25 @@ double PID_SGD::CalcSGD(double iPrevFeedback, double iNewFeedback, double iTheta
 
 double PID_SGD::GetKp()
 {
+	unique_lock<recursive_mutex> lLock(mMutex);
 	return  mKp;
 }
 
 double PID_SGD::GetKi()
 {
+	unique_lock<recursive_mutex> lLock(mMutex);
 	return  mKi;
 }
 
 double PID_SGD::GetKd()
 {
+	unique_lock<recursive_mutex> lLock(mMutex);
 	return  mKd;
 }
 
 double PID_SGD::GetTotalError()
 {
+	unique_lock<recursive_mutex> lLock(mMutex);
 	return  mTotalError;
 }
 
@@ -459,6 +486,7 @@ void PID_SGD::LogTrace(char* iStr)
 
 void PID_SGD::ResetTotal(unsigned long iNow)
 {
+	unique_lock<recursive_mutex> lLock(mMutex);
 	mOutputSum = 0;
 	mTotalError = 0;
 	mLastErrorPoint = iNow;
@@ -467,11 +495,13 @@ void PID_SGD::ResetTotal(unsigned long iNow)
 
 void PID_SGD::SetLearningFlag(bool ibFlag)
 {
+	unique_lock<recursive_mutex> lLock(mMutex);
 	mbStopLearning = ibFlag;
 }
 
 void PID_SGD::SetLearningRate(double iLearningRate)
 {
+	unique_lock<recursive_mutex> lLock(mMutex);
 	mKpLearningRate = iLearningRate;
 	mKiLearningRate = iLearningRate;
 	mKdLearningRate = iLearningRate;
@@ -479,11 +509,50 @@ void PID_SGD::SetLearningRate(double iLearningRate)
 
 void PID_SGD::SetMaxLoss(double iLoss)
 {
+	unique_lock<recursive_mutex> lLock(mMutex);
 	mMaxLoss = iLoss;
 }
 
 double PID_SGD::GetLastError()
 {
+	unique_lock<recursive_mutex> lLock(mMutex);
 	return  mLastError;
 }
 
+void PID_SGD::DumpLearningRate()
+{
+	// define LEARNING_RATE_FILE "PID_rate.txt"
+	// std::ifstream infile("thefile.txt");
+	std::ofstream lRateFile (LEARNING_RATE_FILE);
+	if (lRateFile.is_open())
+	{
+		lRateFile << "mKp " << mKp<<std::endl;
+		lRateFile << "mKi " << mKi<<std::endl;
+		lRateFile << "mKd " << mKd<<std::endl;
+		lRateFile.close();
+	}	
+}
+
+void PID_SGD::LoadLearningRate()
+{
+	// define LEARNING_RATE_FILE "PID_rate.txt"
+	printf("Enter: LoadLearningRate\n");
+	std::ifstream lRateFile(LEARNING_RATE_FILE);
+	std::string lLine;
+	while(std::getline(lRateFile, lLine))
+	{
+		printf("line: %s\n", lLine.c_str());
+		std::istringstream stream(lLine);
+		std::string lVar;
+		double lValue;
+		if (!(stream >> lVar >> lValue))
+			break;
+		unique_lock<recursive_mutex> lLock(mMutex);
+		if (lVar.compare("mKp")==0)
+			mKp = lValue;
+		else if (lVar.compare("mKi")==0)
+			mKi = lValue;
+		else if (lVar.compare("mKd")==0)
+			mKd = lValue;
+	}
+}

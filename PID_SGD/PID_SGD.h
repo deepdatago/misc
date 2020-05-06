@@ -2,7 +2,10 @@
 #define PID_SGD_h
 #define LIBRARY_VERSION	0.0.1
 
+#include <mutex>
+
 // #define PID_TRACE
+using namespace std;
 
 class PID_SGD
 {
@@ -76,6 +79,9 @@ public:
 	double GetLastError();
 	double GetOutput() {return *mpOutput;}
 
+	void DumpLearningRate();
+	void LoadLearningRate();
+
 private:
 	double CalcSGD(double iPrevFeedback,
 		double iNewFeedback,
@@ -134,6 +140,8 @@ private:
 	unsigned long mLastErrorPoint;
 	double mLastOutput;
 	bool mbStopLearning;
+
+	recursive_mutex mMutex;
 };
 #endif
 

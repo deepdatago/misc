@@ -18,6 +18,7 @@
 #include <list>
 #include <map>
 #include <string.h>
+#include <cmath>
 
 #include <inttypes.h>
 #include <mutex>
@@ -33,10 +34,8 @@ using namespace std;
 static map<pthread_t, uint64_t> gMemMap;
 
 int numOfThreads = 1;
-uint64_t gGoverningMemoryLimit_inMB = 80;
 
 uint64_t oneMB = 1024 * 1024;
-uint64_t gGoverningMemoryLimit = gGoverningMemoryLimit_inMB * oneMB;
 
 uint64_t gAllocatedMemory = 0;
 mutex gMutex;
@@ -78,14 +77,6 @@ uint64_t getSize(list<char*> &iList)
         return memorySize;
 }
 
-uint64_t getMemGoverningLimit()
-{
-        pthread_t threadId = pthread_self();
-	unique_lock<mutex> lLock (gMutex);
-	// return (getFreeMemoryInBytes() - gGoverningMemoryLimit) / numOfThreads;
-	return gGoverningMemoryLimit;
-}
-
 void releaseMemoryToSafeLevel(uint64_t allocSize, std::list<char*>& ptrList)
 {
 	uint64_t removedSize = 0;
@@ -111,7 +102,6 @@ uint64_t proposeRandMemoryToAllocate(uint64_t proposedMemInMB)
 	return proposedMemInMB * oneMB;
 	/*
 	// allocate between [initMemory_inMB, 2*initMemory_inMB]
-	// uint64_t initMemory_inMB = gGoverningMemoryLimit_inMB/10;
 	uint64_t initMemory_inMB = proposedMemInMB;
 	uint64_t allocInMB = 0;
 	allocInMB = (rand() % (initMemory_inMB * 2) + initMemory_inMB);
@@ -171,10 +161,11 @@ void processMemUsage(double& vm_usage, double& resident_set)
 void *runMethod(void* ipInput)
 {
         // sched_yield();
+        // PID_SGD* lpPID_SGD = (PID_SGD*) ipInput;
         double input = 1;
         double output = 0;
-        double setPoint = 40; // 40MB free
-        double P_On = 0;
+        double setPoint = 100; // 40MB free
+        double P_On = 1;
         int controllerDirection = REVERSE;
         double maxLoss = 10;
         double learningRate = 0.01;
@@ -194,20 +185,30 @@ void *runMethod(void* ipInput)
         uint64_t allocInMB = 0;
         std::list<char*> ptrList;
         uint64_t proposedAllocInMB = 1;
+       	double currentMax = 0.0;
         
         while(true)
         {
                 // allocate a random sized memory
         	uint64_t currentFreeMem = getFreeMemoryInBytes() / oneMB;
         	input = currentFreeMem;
-        	lPID_SGD.SetOutputLimits(0.0, currentFreeMem / 2.0);
+        	currentMax = currentFreeMem / 2.0;
+        	lPID_SGD.SetOutputLimits(0.0, currentMax);
                 lPID_SGD.Compute();
         	proposedAllocInMB = output;
                 uint64_t allocSize = proposeRandMemoryToAllocate(proposedAllocInMB);
                 // if (getSize(ptrList) > getMemGoverningLimit())
-                if (currentFreeMem < getMemGoverningLimit()/oneMB)
+                if (currentFreeMem < setPoint/oneMB)
                 {
                         releaseMemoryToSafeLevel(allocSize, ptrList);
+                }
+                else if (proposedAllocInMB == 0)
+                {
+			int randNo = rand() % 10;
+			if (randNo <=3) // 30% of chance to release some memory
+			{
+                        	releaseMemoryToSafeLevel(setPoint, ptrList);
+			}
                 }
                 // printf("thread id: %llu allocated: %llu(MB) plan to allocate: %d(MB)\n", threadId, getSize(ptrList), allocSize/oneMB);
                 // printf("free memory:  %llu already allocated: %llu(MB) plan to allocate: %d(MB)\n", currentFreeMem, getSize(ptrList)/oneMB, allocSize/oneMB);
@@ -218,7 +219,12 @@ void *runMethod(void* ipInput)
                 ptrList.push_back(ptr);
         	uint64_t newFreeMem = getFreeMemoryInBytes() / oneMB;
                 char outputStr[256];
-                sprintf(outputStr, "free memory:  %lu previously allocated: %lu(MB) plan to allocate: %lu(MB), after allocate size: %lu(MB), new Free memory(MB): %lu\n", currentFreeMem, currentSize/oneMB, allocSize/oneMB, getSize(ptrList)/oneMB, newFreeMem);
+                bool useMax = false;
+        	if (abs(proposedAllocInMB - currentMax) < 0.1)
+        	{
+        		useMax = true;
+        	}
+                sprintf(outputStr, "free memory:  %lu previously allocated: %lu(MB) plan to allocate: %lu(MB), after allocate size: %lu(MB), new Free memory(MB): %lu -----> use max? %s <------ \n", currentFreeMem, currentSize/oneMB, allocSize/oneMB, getSize(ptrList)/oneMB, newFreeMem, useMax ? "TRUE" : "FALSE");
                 std::cout<<outputStr<<std::endl;
 
                 // usleep(500000);
@@ -229,13 +235,18 @@ void *runMethod(void* ipInput)
 
 int main ()
 {
+        pthread_t       pthread[numOfThreads];
+        void*           lRtn = NULL;
+        srand(time(NULL));
+        printf("Total system memory: %lu\n", getTotalSystemMemory());
+
         /*
-        double input = 0;
+        double input = 1;
         double output = 0;
-        double setPoint = 0;
-        double P_On = 0;
-        int controllerDirection = 1;
-        double maxLoss = 100;
+        double setPoint = 100; // 40MB free
+        double P_On = 1;
+        int controllerDirection = REVERSE;
+        double maxLoss = 10;
         double learningRate = 0.01;
         PID_SGD		lPID_SGD(&input,
         			&output,
@@ -244,17 +255,13 @@ int main ()
         			controllerDirection,
         			maxLoss,
         			learningRate);
+        lPID_SGD.SetMode(AUTOMATIC);
         */
-        pthread_t       pthread[numOfThreads];
-        void*           lRtn = NULL;
-        srand(time(NULL));
-        printf("Total system memory: %lu\n", getTotalSystemMemory());
 
         for (int i = 0; i < numOfThreads; ++i)
         {
                 pthread_create(&pthread[i], NULL, runMethod, NULL);
                 // pthread_create(&pthread[i], NULL, runMethod, &lPID_SGD);
-                // pthread_create(&pthread[i], NULL, runMethod, tmpBuffer);
         }
 
         for (int i = 0; i < numOfThreads; ++i)
