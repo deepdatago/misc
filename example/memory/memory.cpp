@@ -33,21 +33,29 @@ using namespace std;
 
 static map<pthread_t, uint64_t> gMemMap;
 
-int numOfThreads = 2;
+int numOfThreads = 1;
 
 uint64_t oneMB = 1024 * 1024;
 
 uint64_t gAllocatedMemory = 0;
 mutex gMutex;
+std::ofstream gLogFile;
 
+void log(std::string iString)
+{
+	gLogFile << iString;
+}
+
+/*
 uint64_t getTotalSystemMemory()
 {
     long pages = sysconf(_SC_PHYS_PAGES);
     long page_size = sysconf(_SC_PAGE_SIZE);
     return pages * page_size;
 }
-
+*/
 unsigned long getFreeMemoryInBytes() {
+    log("Entering::getFreeMemoryInBytes\n");
     std::string token;
     std::ifstream file("/proc/meminfo");
     while(file >> token) {
@@ -62,11 +70,13 @@ unsigned long getFreeMemoryInBytes() {
         // ignore rest of the line
         file.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
     }
+    log("Leaving::getFreeMemoryInBytes\n");
     return 0; // nothing found
 }
 
 uint64_t getSize(list<char*> &iList)
 {
+        log("Entering::getSize\n");
         uint64_t memorySize = 0;
         std::list<char*>::iterator iter = iList.begin();
         while(iter != iList.end())
@@ -74,11 +84,13 @@ uint64_t getSize(list<char*> &iList)
                 memorySize += strlen(*iter);
                 ++iter;
         }
+        log("Leaving::getSize\n");
         return memorySize;
 }
 
 void releaseMemoryToSafeLevel(uint64_t allocSize, std::list<char*>& ptrList)
 {
+        log("Entering::releaseMemoryToSafeLevel\n");
 	uint64_t removedSize = 0;
         pthread_t threadId = pthread_self();
 	while(removedSize < allocSize)
@@ -87,15 +99,20 @@ void releaseMemoryToSafeLevel(uint64_t allocSize, std::list<char*>& ptrList)
 		char* lpTmp = *iter;
 		if (lpTmp == NULL || iter == ptrList.end())
 		{
-			printf("\ttid: %lu: Nothing to release: threadAllocatedMemory(MB): %lu, already removedSize(MB): %lu, plan to allocSize(MB): %lu\n", threadId, getSize(ptrList)/oneMB, removedSize/oneMB, allocSize/oneMB);
+			char outStr[256];
+			sprintf(outStr, "\ttid: %lu: Nothing to release: threadAllocatedMemory(MB): %lu, already removedSize(MB): %lu, plan to allocSize(MB): %lu\n", threadId, getSize(ptrList)/oneMB, removedSize/oneMB, allocSize/oneMB);
+			log(outStr);
 			break;
 		}
 		removedSize += strlen(lpTmp);
-		printf("\ttid: %lu: releaseMemory: removedSize(MB): %lu\n", threadId, removedSize/oneMB);
+		char outStr[256];
+		sprintf(outStr, "\ttid: %lu: releaseMemory: removedSize(MB): %lu\n", threadId, removedSize/oneMB);
+		log(outStr);
 		ptrList.pop_front();
 		delete lpTmp;
 		lpTmp = NULL;
 	}
+        log("Leaving::releaseMemoryToSafeLevel\n");
 }
 
 uint64_t proposeRandMemoryToAllocate(uint64_t proposedMemInMB)
@@ -113,15 +130,17 @@ uint64_t proposeRandMemoryToAllocate(uint64_t proposedMemInMB)
 
 char* populateMemory(uint64_t allocSize)
 {
+	log("Entering::populateMemory\n");
 	char* ptr = new char[allocSize+1];
 	for (int i = 0; i < allocSize; ++i)
        	{
 	       	ptr[i] = 'a';
        	}
        	ptr[allocSize] = '\0';
+	log("Leaving::populateMemory\n");
        	return ptr;
 }
-
+/*
 void processMemUsage(double& vm_usage, double& resident_set)
 {
    using std::ios_base;
@@ -158,7 +177,7 @@ void processMemUsage(double& vm_usage, double& resident_set)
    vm_usage     = vsize / 1024.0;
    resident_set = rss * page_size_kb;
 }
-
+*/
 void *runMethod(void* ipInput)
 {
         // sched_yield();
@@ -178,6 +197,7 @@ void *runMethod(void* ipInput)
         
         while(true)
         {
+		log("Begining::while\n");
                 // allocate a random sized memory
         	uint64_t currentFreeMem = getFreeMemoryInBytes() / oneMB;
         	currentMax = currentFreeMem / (2.0 * numOfThreads);
@@ -210,14 +230,16 @@ void *runMethod(void* ipInput)
                 char* ptr = populateMemory(allocSize);
                 ptrList.push_back(ptr);
         	uint64_t newFreeMem = getFreeMemoryInBytes() / oneMB;
-                char outputStr[256];
                 bool useMax = false;
         	if (abs(proposedAllocInMB - currentMax) < 0.1)
         	{
         		useMax = true;
         	}
+
+                char outputStr[256];
                 sprintf(outputStr, "tid: %lu free memory:  %lu previously allocated: %lu(MB) plan to allocate: %lu(MB), after allocate size: %lu(MB), new Free memory(MB): %lu -----> use max? %s <------ \n", threadId, currentFreeMem, currentSize/oneMB, allocSize/oneMB, getSize(ptrList)/oneMB, newFreeMem, useMax ? "TRUE" : "FALSE");
-                std::cout<<outputStr<<std::endl;
+		log(outputStr);
+		log("\tEnding::while\n");
 
                 // usleep(500000);
                 // sleep(1);
@@ -227,10 +249,11 @@ void *runMethod(void* ipInput)
 
 int main ()
 {
+	gLogFile.open("/tmp/trace.log", std::ios_base::app);
         pthread_t       pthread[numOfThreads];
         void*           lRtn = NULL;
         srand(time(NULL));
-        printf("Total system memory: %lu\n", getTotalSystemMemory());
+        // printf("Total system memory: %lu\n", getTotalSystemMemory());
 
         double setPoint = 70; // 40MB free
         double P_On = 1;
