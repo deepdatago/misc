@@ -1,15 +1,15 @@
 /**********************************************************************************************
- * Arduino PID Library with Stochastic Gradient Decent - Version 0.0.1
+ * PID Library for C++11
  * by Mingjun Zhu <deepdatago@gmail.com>
  * based on the work from Brett Beauregard <br3ttb@gmail.com> brettbeauregard.com
  * Brett's work is at https://github.com/br3ttb/Arduino-PID-Library/
  *
  * Major changes are:
  *
- * 1) Add CalcSGD, which is to use Stochastic Gradient Descent method to learn the P/I/D
- *
- * 2) Add ResetTotal method.  This is to reset ouput sum to 0, when error is less than
+ * 1) Add ResetTotal method.  This is to reset ouput sum to 0, when error is less than
  *    the predefined max loss, or when error sways pass the setpoint
+ *
+ * 2) Add recursive mutex for multi-threaded environment
  *
  * TODO: for mP_On_E == 0, or P_ON_M is on, I haven't tested this case so I didn't do learning.
  * This case should be reviewed in future
@@ -38,43 +38,32 @@
 
 using namespace std;
 
-PID_SGD::PID_SGD(double* ipInput,
-	double* ipOutput,
-	double* ipSetpoint,
+PID_SGD::PID_SGD(double iSetpoint,
         int iP_On,
-	int iControllerDirection,
-	double iMaxLoss,
-	double iLearningRate)
-{
+        // int iMaxLoss,
+	int iControllerDirection):
+
 	// mMaxLoss will determine if we are in good state, or need to continue the training
-	mMaxLoss = iMaxLoss;
-	mKpLearningRate = iLearningRate;
-	mKiLearningRate = iLearningRate;
-	mKdLearningRate = iLearningRate;
+		mMaxLoss(0),
+
+		mLastDInput(0.0),
 
 	// PID are set to 1.0 by default, user can call SetTunings to give different
 	// initial values
-	mKp = 1.0;
-	mKi = 1.0;
-	mKd = 1.0;
+		mKp(1.0),
+		mKi(1.0),
+		mKd(1.0),
+		mLastErrorPoint(millis()),
+		mLastError(0),
+		mLastOutput(0.0),
+		mbInAuto(false),
+		mSetpoint(iSetpoint),
+		mTotalError(0.0)
 
-	mLastDInput = 0.0;
-	mTotalError = 0.0;
-
-	mTotalErrorBeforeLastErrorPoint = 0;
-	mLastErrorPoint = millis();
-
-	mLastError = 0;
-	mLastOutput = 0.0;
-	mbStopLearning = false;
+{
 #ifdef PID_TRACE
 	mDebugStr = "";
 #endif
-	mpOutput = ipOutput;
-	mpInput = ipInput;
-	mpSetpoint = ipSetpoint;
-	mbInAuto = false;
-
 	//default output limit corresponds to the arduino pwm limits
 	SetOutputLimits(0, 255);
 
@@ -101,34 +90,38 @@ unsigned long PID_SGD::millis()
  *   pid Output needs to be computed.  returns true when the output is computed,
  *   false when nothing has been done.
  **********************************************************************************/
-bool PID_SGD::Compute()
+std::tuple<bool, double> PID_SGD::Compute(double input)
 {
+	unique_lock<recursive_mutex> lLock(mMutex);
 #ifdef PID_TRACE
 	mDebugStr = "";
 #endif
+	double output = 0.0;
 	static unsigned long timer = millis();
 	if(!mbInAuto)
-		return false;
+		return std::make_tuple(false, 0.0);
 
 	unsigned long now = millis();
+	/*
 	if (now - timer > 5000)
 	{
 		// DumpLearningRate();
 		timer = millis();
 	}
+	*/
 	unsigned long timeChange = (now - mLastTime);
 	if(timeChange>=mSampleTimeInMilliSecond)
 	{
 		unique_lock<recursive_mutex> lLock(mMutex);
 		/*Compute all the working error variables*/
-		double input = *mpInput;
+		// double input = *mpInput;
 
 		#ifdef PID_TRACE
 		// LogTrace(" input: ");
 		// LogTrace(input);
 		#endif
 
-		double error = *mpSetpoint - input;
+		double error = mSetpoint - input;
 		#ifdef PID_TRACE
 		// LogTrace(" error: ");
 		// LogTrace(error);
@@ -136,9 +129,9 @@ bool PID_SGD::Compute()
 
 		if (abs(error) < mMaxLoss)
 		{
-			*mpOutput = mLastOutput;
+			// *mpOutput = mLastOutput;
 			ResetTotal(now);
-			return true;
+			return std::make_tuple(true, mLastOutput);
 		}
 
 		double dInput = (input - mLastInput);
@@ -164,12 +157,6 @@ bool PID_SGD::Compute()
 		LogTrace(mKi);
 		#endif
 
-		#endif
-
-		mKi = CalcSGD(mTotalError, mTotalError + error, mKi, mKiLearningRate);
-		#ifdef PID_TRACE
-		LogTrace(" Calc mKi: ");
-		LogTrace(mKi);
 		#endif
 
 		mTotalError += error;
@@ -202,33 +189,15 @@ bool PID_SGD::Compute()
 			mOutputSum= mOutMin;
 
 		/*Add Proportional on Error, if P_ON_E is specified*/
-		double output = 0.0;
 		if(mP_On_E)
 		{
-			mLastError = *mpSetpoint - mLastInput;
-			mKp = CalcSGD(*mpSetpoint - mLastInput, error, mKp, mKpLearningRate);
-			#ifdef PID_TRACE
-			LogTrace(" Calc mKp: ");
-			LogTrace(mKp);
-			#endif
-	
+			mLastError = mSetpoint - mLastInput;
 			output = mKp * error;
-			#ifdef PID_TRACE
-			// LogTrace(" output2: ");
-			// LogTrace(output);
-			#endif
 		}
 		else
 		{
 			output = 0;
 		}
-
-		/*Compute Rest of PID Output*/
-		// mKd = CalcSGD(mLastDInput, dInput, mKd, mKdLearningRate);
-		#ifdef PID_TRACE
-		LogTrace(" Calc mKd: ");
-		LogTrace(mKd);
-		#endif
 
 		// disable D
 		// output += mOutputSum - (mKd / mSampleTimeInMilliSecond / 1000) * dInput;
@@ -245,7 +214,7 @@ bool PID_SGD::Compute()
 		else if(output < mOutMin)
 			output = mOutMin;
 
-		*mpOutput = output;
+		// *mpOutput = output;
 
 		#ifdef PID_TRACE
 		// LogTrace(" output_final: ");
@@ -256,10 +225,10 @@ bool PID_SGD::Compute()
 		/*Remember some variables for next time*/
 		mLastInput = input;
 		mLastTime = now;
-		return true;
+		return std::make_tuple(true, output);
 	}
 
-	return false;
+	return std::make_tuple(false, 0.0);
 }
 
 /* SetTunings(...)*************************************************************
@@ -323,10 +292,12 @@ void PID_SGD::SetOutputLimits(double iMin, double iMax)
 
 	if(mbInAuto)
 	{
+		/*
 		if(*mpOutput > mOutMax)
 			*mpOutput = mOutMax;
 		else if(*mpOutput < mOutMin)
 			*mpOutput = mOutMin;
+		*/
 
 		if(mOutputSum > mOutMax)
 			mOutputSum= mOutMax;
@@ -340,13 +311,13 @@ void PID_SGD::SetOutputLimits(double iMin, double iMax)
  * when the transition from manual to auto occurs, the controller is
  * automatically initialized
  ******************************************************************************/
-void PID_SGD::SetMode(int Mode)
+void PID_SGD::SetMode(int iMode)
 {
-	bool newAuto = (Mode == AUTOMATIC);
+	bool newAuto = (iMode == AUTOMATIC);
 	unique_lock<recursive_mutex> lLock(mMutex);
 	if(newAuto && !mbInAuto)
 	{  /*we just went from manual to auto*/
-	        PID_SGD::Initialize();
+	        // PID_SGD::Initialize();
 	}
 	mbInAuto = newAuto;
 }
@@ -355,6 +326,7 @@ void PID_SGD::SetMode(int Mode)
  *	does all the things that need to happen to ensure a bumpless transfer
  *  from manual to automatic mode.
  ******************************************************************************/
+/*
 void PID_SGD::Initialize()
 {
 	unique_lock<recursive_mutex> lLock(mMutex);
@@ -367,7 +339,7 @@ void PID_SGD::Initialize()
 	else if(mOutputSum < mOutMin)
 		mOutputSum = mOutMin;
 }
-
+*/
 /* SetControllerDirection(...)*************************************************
  * The PID will either be connected to a DIRECT acting process (+Output leads
  * to +Input) or a REVERSE acting process(+Output leads to -Input.)  we need to
@@ -398,54 +370,6 @@ int PID_SGD::GetDirection()
 	return mControllerDirection;
 }
 
-double PID_SGD::CalcSGD(double iPrevFeedback, double iNewFeedback, double iTheta, double iLearningRate)
-{
-	// English refence: page 7 at: https://mycourses.aalto.fi/pluginfile.php/393629/mod_resource/content/1/Lecture8.pdf
-	// downloaded as: doc/Lecture8.pdf
-	// or, in Chinese: http://blog.csdn.net/lilyth_lilyth/article/details/8973972
-	// downloaded as: doc/SGD_Theory_in_Chinese.pdf
-	// simplify it as:
-	// h(x) = gTheta * x, h(x) is the PID input for next episode
-	// where, x is prevFeedback, can be set to anything (like 0.0) at beginning
-	// y is newFeedback, which is the actual feedback from sensor (environment)
-	// we need to train theta
-
-	if (mbStopLearning)
-	{
-		return iTheta;
-	}
-
-	if (abs(iTheta * iPrevFeedback - iNewFeedback) < mMaxLoss)
-	{
-		return iTheta;
-	}
-
-	double prevTheta = iTheta;
-
-	// This is the enhancement part: supposely 
-	// 
-	//	lDiff = iLearningRate * (iTheta * iPrevFeedback - iNewFeedback) * iPrevFeedback;
-	// 
-	// should be used to calculate lDiff, from theory in the URLs
-	// However, I noticed that if input feedback is large, say, in magnitude of 100,
-	// then "(iTheta * iPrevFeedback - iNewFeedback) * iPrevFeedback"
-	// could end up with very large number, and make the lDiff becomes larger and
-	// does not converge.  Therefore, I used "iTheta * iLearningRate" to guarantee
-	// that lDiff will converge
-	double lDiff = iTheta * iLearningRate;
-
-	// lOrigDiff is used to decide if iTheta should be larger or smaller
-	double lOrigDiff = (iTheta * iPrevFeedback - iNewFeedback) * iPrevFeedback;
-	if (lOrigDiff < 0)
-	{
-	  	lDiff = -1 * lDiff;
-	}
-  
-	iTheta = iTheta - lDiff;
-
-	return iTheta;
-}
-
 double PID_SGD::GetKp()
 {
 	unique_lock<recursive_mutex> lLock(mMutex);
@@ -470,6 +394,18 @@ double PID_SGD::GetTotalError()
 	return  mTotalError;
 }
 
+double PID_SGD::GetSetpoint()
+{
+	unique_lock<recursive_mutex> lLock(mMutex);
+	return  mSetpoint;
+}
+
+void PID_SGD::SetSetpoint(double iSetpoint)
+{
+	unique_lock<recursive_mutex> lLock(mMutex);
+	mSetpoint = iSetpoint;
+}
+
 void PID_SGD::LogTrace(double iVal)
 {
 #ifdef PID_TRACE
@@ -490,21 +426,6 @@ void PID_SGD::ResetTotal(unsigned long iNow)
 	mOutputSum = 0;
 	mTotalError = 0;
 	mLastErrorPoint = iNow;
-	mTotalErrorBeforeLastErrorPoint = mTotalError;
-}
-
-void PID_SGD::SetLearningFlag(bool ibFlag)
-{
-	unique_lock<recursive_mutex> lLock(mMutex);
-	mbStopLearning = ibFlag;
-}
-
-void PID_SGD::SetLearningRate(double iLearningRate)
-{
-	unique_lock<recursive_mutex> lLock(mMutex);
-	mKpLearningRate = iLearningRate;
-	mKiLearningRate = iLearningRate;
-	mKdLearningRate = iLearningRate;
 }
 
 void PID_SGD::SetMaxLoss(double iLoss)

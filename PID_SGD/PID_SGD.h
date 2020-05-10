@@ -3,9 +3,16 @@
 #define LIBRARY_VERSION	0.0.1
 
 #include <mutex>
+#include <tuple> // C++11
 
 // #define PID_TRACE
 using namespace std;
+enum PID_FLAGS
+{
+	P = 0x001,
+	I = 0x010,
+	D = 0x100,
+};
 
 class PID_SGD
 {
@@ -20,13 +27,10 @@ public:
 
 	#define P_ON_E 1
 
-	PID_SGD(double* ipInput,
-		double* ipOutput,
-		double* ipSetpoint,
+	PID_SGD(double iSetpoint,
 		int iP_On,
-		int iControllerDirection,
-		double iMaxLoss, // If error is smaller than this value, then we will stop learning
-		double iLearningRate);
+		// int iMaxLoss,
+		int iControllerDirection);
 
 	
 	// * sets PID to either Manual (0) or Auto (non-0)
@@ -36,7 +40,8 @@ public:
 	//   called every time loop() cycles. ON/OFF and
 	//   calculation frequency can be set using SetMode
 	//   SetSampleTime respectively
-	bool Compute();
+	// bool Compute();
+	std::tuple<bool, double> Compute(double input);
 
 	// clamps the output to a specific range. 0-255 by default, but
 	// it's likely the user will want to change this depending on
@@ -69,25 +74,19 @@ public:
 	int GetMode();
 	int GetDirection();
 	double GetTotalError();
+	double GetSetpoint();
 
-	// start/stop learning
-	void SetLearningFlag(bool ibFlag);
+	void SetSetpoint(double iSetpoint);
 
-	void SetLearningRate(double iLearningRate);
 	void SetMaxLoss(double iMaxLoss);
 
 	double GetLastError();
-	double GetOutput() {return *mpOutput;}
+	// double GetOutput() {return *mpOutput;}
 
 	void DumpLearningRate();
 	void LoadLearningRate();
 
 private:
-	double CalcSGD(double iPrevFeedback,
-		double iNewFeedback,
-		double iTheta,
-		double iLearningRate);
-
 	void LogTrace(char* iStr);
 	void LogTrace(double iVal);
 
@@ -111,9 +110,6 @@ private:
 	String mDebugStr;
 #endif
 	double mTotalError;
-	double mKpLearningRate;
-	double mKiLearningRate;
-	double mKdLearningRate;
 	double mTimeSpan;
 	double mLastInput;
 	double mLastError;
@@ -123,9 +119,9 @@ private:
 	// This creates a hard link between the variables and the 
 	// PID, freeing the user from having to constantly tell us
 	// what these values are.  with pointers we'll just know.
-	double* mpInput;
-	double* mpOutput;
-	double* mpSetpoint;
+	// double* mpInput;
+	// double* mpOutput;
+	double mSetpoint;
 			  
 	unsigned long mLastTime;
 	double mOutputSum;
@@ -136,10 +132,8 @@ private:
 	bool mbInAuto;
 	bool mP_On_E;
 	double mMaxLoss;
-	double mTotalErrorBeforeLastErrorPoint;
 	unsigned long mLastErrorPoint;
 	double mLastOutput;
-	bool mbStopLearning;
 
 	recursive_mutex mMutex;
 };
