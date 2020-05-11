@@ -33,7 +33,7 @@ using namespace std;
 
 static map<pthread_t, uint64_t> gMemMap;
 
-int numOfThreads = 1;
+int numOfThreads = 2;
 
 uint64_t oneMB = 1024 * 1024;
 
@@ -132,7 +132,7 @@ char* populateMemory(uint64_t allocSize)
 {
 	log("Entering::populateMemory\n");
 	char* ptr = new char[allocSize+1];
-	for (int i = 0; i < allocSize; ++i)
+	for (int i = 0; i < allocSize/100; ++i)
        	{
 	       	ptr[i] = 'a';
        	}
