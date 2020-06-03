@@ -9,9 +9,9 @@
 using namespace std;
 enum PID_FLAGS
 {
-	P = 0x001,
-	I = 0x010,
-	D = 0x100,
+	PID_P = 0b001,
+	PID_I = 0b010,
+	PID_D = 0b100,
 };
 
 class PID_SGD
@@ -28,9 +28,10 @@ public:
 	#define P_ON_E 1
 
 	PID_SGD(double iSetpoint,
-		int iP_On,
+		// int iP_On,
 		// int iMaxLoss,
-		int iControllerDirection);
+		int iControllerDirection,
+		int iPIDFlags);
 
 	
 	// * sets PID to either Manual (0) or Auto (non-0)
@@ -54,9 +55,6 @@ public:
         //   constructor, this function gives the user the option
         //   of changing tunings during runtime for Adaptive control
 	void SetTunings(double iKp, double iKi, double iKd);
-
-	// * overload for specifying proportional mode
-	void SetTunings(double iKp, double iKi, double iKd, int iP_On);         	  
 
 	// Sets the Direction, or "Action" of the controller. DIRECT
 	// means the output will increase when error is positive. REVERSE
@@ -104,7 +102,8 @@ private:
 	double mKd;
 
 	int mControllerDirection;
-	int mP_On;
+	// int mP_On;
+	int mPIDFlags;
 
 #ifdef PID_TRACE
 	String mDebugStr;
@@ -130,7 +129,7 @@ private:
 	double mOutMin;
 	double mOutMax;
 	bool mbInAuto;
-	bool mP_On_E;
+	// bool mP_On_E;
 	double mMaxLoss;
 	unsigned long mLastErrorPoint;
 	double mLastOutput;

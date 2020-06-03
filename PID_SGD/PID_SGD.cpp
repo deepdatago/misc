@@ -11,8 +11,11 @@
  *
  * 2) Add recursive mutex for multi-threaded environment
  *
- * TODO: for mP_On_E == 0, or P_ON_M is on, I haven't tested this case so I didn't do learning.
- * This case should be reviewed in future
+ * // TODO: for mP_On_E == 0, or P_ON_M is on, I haven't tested this case so I didn't do learning.
+ * // This case should be reviewed in future
+ * Remove mP_On_E and get rid of P_ON_M as I don't find a clear use case as explained in
+ * http://brettbeauregard.com/blog/2017/06/proportional-on-measurement-the-code/
+ * We rely on caller to provide meaningful input
  *
  * Note: naming convention on variables:
  * 	"m" stands for member
@@ -33,15 +36,17 @@
 #include <sys/time.h>
 #include <fstream>
 #include <sstream>
+#include <unistd.h>
 
 #define LEARNING_RATE_FILE "PID_rate.txt"
 
 using namespace std;
 
 PID_SGD::PID_SGD(double iSetpoint,
-        int iP_On,
+        // int iP_On,
         // int iMaxLoss,
-	int iControllerDirection):
+	int iControllerDirection,
+	int iPIDFlags):
 
 	// mMaxLoss will determine if we are in good state, or need to continue the training
 		mMaxLoss(0),
@@ -58,6 +63,7 @@ PID_SGD::PID_SGD(double iSetpoint,
 		mLastOutput(0.0),
 		mbInAuto(false),
 		mSetpoint(iSetpoint),
+		mPIDFlags(iPIDFlags),
 		mTotalError(0.0)
 
 {
@@ -71,7 +77,7 @@ PID_SGD::PID_SGD(double iSetpoint,
 	mSampleTimeInMilliSecond = 100;
 
 	SetControllerDirection(iControllerDirection);
-	SetTunings(mKp, mKi, mKd, iP_On);
+	SetTunings(mKp, mKi, mKd);
 
 	mLastTime = millis()- mSampleTimeInMilliSecond;
 	LoadLearningRate();
@@ -110,7 +116,11 @@ std::tuple<bool, double> PID_SGD::Compute(double input)
 	}
 	*/
 	unsigned long timeChange = (now - mLastTime);
-	if(timeChange>=mSampleTimeInMilliSecond)
+	// Reason we don't do time comparison here, is because this time duration
+	// check is for Arduino board to avoid too many calculations that caused
+	// instability of output.  However, at this place, we always want to
+	// compute.
+	// if(timeChange>=mSampleTimeInMilliSecond)
 	{
 		unique_lock<recursive_mutex> lLock(mMutex);
 		/*Compute all the working error variables*/
@@ -166,7 +176,7 @@ std::tuple<bool, double> PID_SGD::Compute(double input)
 			// just changed to the opposite error, so previous total error doesn't apply
 			ResetTotal(now);
 		}
-		else
+		else if (mPIDFlags & PID_I)
 		{
 			mOutputSum = mKi * mSampleTimeInMilliSecond / 1000 *  mTotalError;
 		}
@@ -176,12 +186,15 @@ std::tuple<bool, double> PID_SGD::Compute(double input)
 		#endif
 
 
-		/*Add Proportional on Measurement, if P_ON_M is specified*/
-		if(!mP_On_E)
+		/*
+		// Add Proportional on Measurement, if P_ON_M is specified
+		// explained in http://brettbeauregard.com/blog/2017/06/proportional-on-measurement-the-code/
+		if(!mP_On_E) // this equal to P_ON_M
 		{
 			// TODO: do we need to call CalcSGD on mKp?
 			mOutputSum-= mKp * dInput;
 		}
+		*/
 
 		if(mOutputSum > mOutMax)
 			mOutputSum= mOutMax;
@@ -189,7 +202,7 @@ std::tuple<bool, double> PID_SGD::Compute(double input)
 			mOutputSum= mOutMin;
 
 		/*Add Proportional on Error, if P_ON_E is specified*/
-		if(mP_On_E)
+		if(mPIDFlags & PID_P)
 		{
 			mLastError = mSetpoint - mLastInput;
 			output = mKp * error;
@@ -199,8 +212,10 @@ std::tuple<bool, double> PID_SGD::Compute(double input)
 			output = 0;
 		}
 
-		// disable D
-		// output += mOutputSum - (mKd / mSampleTimeInMilliSecond / 1000) * dInput;
+		if (mPIDFlags & PID_D)
+		{
+			output += mOutputSum - (mKd / mSampleTimeInMilliSecond / 1000) * dInput;
+		}
 		output += mOutputSum;
 		#ifdef PID_TRACE
 		// LogTrace(" output3: ");
@@ -227,7 +242,6 @@ std::tuple<bool, double> PID_SGD::Compute(double input)
 		mLastTime = now;
 		return std::make_tuple(true, output);
 	}
-
 	return std::make_tuple(false, 0.0);
 }
 
@@ -236,11 +250,11 @@ std::tuple<bool, double> PID_SGD::Compute(double input)
  * it's called automatically from the constructor, but tunings can also
  * be adjusted on the fly during normal operation
  ******************************************************************************/
-void PID_SGD::SetTunings(double iKp, double iKi, double iKd, int iPOn)
+// void PID_SGD::SetTunings(double iKp, double iKi, double iKd, int iPOn)
+void PID_SGD::SetTunings(double iKp, double iKi, double iKd)
 {
 	unique_lock<recursive_mutex> lLock(mMutex);
-	mP_On = iPOn;
-	mP_On_E = (iPOn == P_ON_E);
+	// mP_On_E = (iPOn == P_ON_E);
 
 	mKp = iKp;
 	mKi = iKi;
@@ -252,13 +266,6 @@ void PID_SGD::SetTunings(double iKp, double iKi, double iKd, int iPOn)
 		mKi = (0 - mKi);
 		mKd = (0 - mKd);
 	}
-}
-
-/* SetTunings(...)*************************************************************
- * Set Tunings using the last-rembered POn setting
- ******************************************************************************/
-void PID_SGD::SetTunings(double iKp, double iKi, double iKd){
-	SetTunings(iKp, iKi, iKd, mP_On); 
 }
 
 /* SetSampleTime(...) *********************************************************

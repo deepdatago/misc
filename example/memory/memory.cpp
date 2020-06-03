@@ -23,6 +23,8 @@
 #include <inttypes.h>
 #include <mutex>
 #include <fstream>
+#include <sys/types.h>
+#include <sys/sysinfo.h>
 
 #include "PID_SGD/PID_SGD.h"
 
@@ -40,10 +42,12 @@ uint64_t oneMB = 1024 * 1024;
 uint64_t gAllocatedMemory = 0;
 mutex gMutex;
 std::ofstream gLogFile;
+struct sysinfo memInfo;
 
 void log(std::string iString)
 {
-	gLogFile << iString;
+	gLogFile << iString << std::flush;
+	// std::cout << iString;
 }
 
 /*
@@ -54,6 +58,12 @@ uint64_t getTotalSystemMemory()
     return pages * page_size;
 }
 */
+unsigned long getFreeMemoryInMB() {
+	sysinfo(&memInfo);
+	// return (memInfo.freeram + memInfo.freeswap) / oneMB;
+	return (memInfo.freeram) / oneMB;
+}
+/*
 unsigned long getFreeMemoryInBytes() {
     log("Entering::getFreeMemoryInBytes\n");
     std::string token;
@@ -73,7 +83,7 @@ unsigned long getFreeMemoryInBytes() {
     log("Leaving::getFreeMemoryInBytes\n");
     return 0; // nothing found
 }
-
+*/
 uint64_t getSize(list<char*> &iList)
 {
         log("Entering::getSize\n");
@@ -117,25 +127,30 @@ void releaseMemoryToSafeLevel(uint64_t allocSize, std::list<char*>& ptrList)
 
 uint64_t proposeRandMemoryToAllocate(uint64_t proposedMemInMB)
 {
-	return proposedMemInMB * oneMB;
-	/*
-	// allocate between [initMemory_inMB, 2*initMemory_inMB]
-	uint64_t initMemory_inMB = proposedMemInMB;
+	// return proposedMemInMB * oneMB;
+	// according to http://www.cplusplus.com/reference/cstdlib/rand/
+	// allocate between [proposedMemInMB/2, proposedMemInMB]
+	if (proposedMemInMB == 0)
+		return 0;
+	uint64_t initMemory_inMB = proposedMemInMB/2;
 	uint64_t allocInMB = 0;
-	allocInMB = (rand() % (initMemory_inMB * 2) + initMemory_inMB);
+	allocInMB = (rand() % (initMemory_inMB) + initMemory_inMB);
 	uint64_t allocSize = allocInMB * oneMB;
 	return allocSize;
-	*/
 }
 
 char* populateMemory(uint64_t allocSize)
 {
 	log("Entering::populateMemory\n");
 	char* ptr = new char[allocSize+1];
-	for (int i = 0; i < allocSize/100; ++i)
+	// for (int i = 0; i < allocSize/100; ++i)
+	memset(ptr, 'a', allocSize);
+	/*
+	for (int i = 0; i < allocSize; ++i)
        	{
 	       	ptr[i] = 'a';
        	}
+       	*/
        	ptr[allocSize] = '\0';
 	log("Leaving::populateMemory\n");
        	return ptr;
@@ -199,7 +214,7 @@ void *runMethod(void* ipInput)
         {
 		log("Begining::while\n");
                 // allocate a random sized memory
-        	uint64_t currentFreeMem = getFreeMemoryInBytes() / oneMB;
+        	uint64_t currentFreeMem = getFreeMemoryInMB();
         	currentMax = currentFreeMem / (2.0 * numOfThreads);
         	lpPID_SGD->SetOutputLimits(0.0, currentMax);
                 tie(lbComputed, lOutput) = lpPID_SGD->Compute(currentFreeMem * 1.0);
@@ -210,7 +225,7 @@ void *runMethod(void* ipInput)
         	proposedAllocInMB = lOutput;
                 uint64_t allocSize = proposeRandMemoryToAllocate(proposedAllocInMB);
                 // if (getSize(ptrList) > getMemGoverningLimit())
-                if (currentFreeMem < lSetPoint / oneMB)
+                if (currentFreeMem < lSetPoint)
                 {
                         releaseMemoryToSafeLevel(allocSize, ptrList);
                 }
@@ -229,7 +244,7 @@ void *runMethod(void* ipInput)
 
                 char* ptr = populateMemory(allocSize);
                 ptrList.push_back(ptr);
-        	uint64_t newFreeMem = getFreeMemoryInBytes() / oneMB;
+        	uint64_t newFreeMem = getFreeMemoryInMB();
                 bool useMax = false;
         	if (abs(proposedAllocInMB - currentMax) < 0.1)
         	{
@@ -255,12 +270,11 @@ int main ()
         srand(time(NULL));
         // printf("Total system memory: %lu\n", getTotalSystemMemory());
 
-        double setPoint = 70; // 40MB free
-        double P_On = 1;
+        double setPoint = 40; // 40MB free
+        int pidFlags = PID_P | PID_I; // don't use PID_D as it gives unstable/oscillation
         int controllerDirection = REVERSE;
         PID_SGD		lPID_SGD(setPoint,
-        			P_On,
-        			controllerDirection);
+        			controllerDirection, pidFlags);
         lPID_SGD.SetMode(AUTOMATIC);
 
         for (int i = 0; i < numOfThreads; ++i)
